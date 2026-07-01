@@ -31,3 +31,6 @@ Thumbs.db
 # Local assistant/tool state
 .claude/
 .agents/
+
+# 사진
+.게임모티브*
