@@ -17,6 +17,7 @@ export class GameScene extends Phaser.Scene {
 
   // Item state
   private itemObjs: Phaser.GameObjects.Arc[] = [];
+  private itemEvapTimers = new Set<Phaser.Time.TimerEvent>();
 
   // Run state
   private survivalTime = 0;
@@ -76,6 +77,8 @@ export class GameScene extends Phaser.Scene {
     const rect = this.game.canvas.getBoundingClientRect();
     const gx = (e.clientX - rect.left) * (C.PLAYFIELD_W / rect.width);
     const gy = (e.clientY - rect.top) * (C.PLAYFIELD_H / rect.height);
+
+    if (gx < 0 || gx > C.PLAYFIELD_W || gy < 0 || gy > C.PLAYFIELD_H) return;
 
     if (this.isPaused && !this.dead) {
       const onRetry = this.pauseRetryBtn.visible
@@ -170,6 +173,7 @@ export class GameScene extends Phaser.Scene {
     this.bulletObjs = [];
     this.bulletReady = [];
     this.itemObjs = [];
+    this.itemEvapTimers = new Set();
     this.trailGfxList = [];
     this.survivalTime = 0;
     this.bulletsDestroyed = 0;
@@ -609,8 +613,9 @@ export class GameScene extends Phaser.Scene {
     this.itemObjs.push(item);
 
     // Evaporate after ITEM_LIFETIME_MS if not collected
-    this.time.delayedCall(C.ITEM_LIFETIME_MS, () => {
-      if (this.dead) return; // scene is shutting down
+    const evapTimer = this.time.delayedCall(C.ITEM_LIFETIME_MS, () => {
+      this.itemEvapTimers.delete(evapTimer);
+      if (this.dead) return;
       const idx = this.itemObjs.indexOf(item);
       if (idx < 0) return; // already collected
       this.tweens.killTweensOf(item);
@@ -628,6 +633,7 @@ export class GameScene extends Phaser.Scene {
         },
       });
     });
+    this.itemEvapTimers.add(evapTimer);
   }
 
   // -------------------------------------------------------------------
@@ -777,6 +783,8 @@ export class GameScene extends Phaser.Scene {
     this.dead = true;
     this.bulletTimer?.remove();
     this.itemTimer?.remove();
+    for (const t of this.itemEvapTimers) t.remove();
+    this.itemEvapTimers.clear();
 
     for (const g of this.trailGfxList) g.clear();
     this.speedGfx.clear();
