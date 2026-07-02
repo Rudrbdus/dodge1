@@ -1,5 +1,5 @@
 // ── Canvas ──────────────────────────────────────────────────────────────────
-export const PLAYFIELD_W = 390;
+export const PLAYFIELD_W = 430;
 export const PLAYFIELD_H = 844;
 
 // ── HUD & Play-area layout ───────────────────────────────────────────────────

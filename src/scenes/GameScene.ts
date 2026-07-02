@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import * as C from '../config';
 import { theme, GameSettings, GameStats } from '../state';
+import { CHARACTER_DRAW_FNS } from '../characters';
 
 export class GameScene extends Phaser.Scene {
   // Player state
@@ -54,6 +55,14 @@ export class GameScene extends Phaser.Scene {
   // Home UI state
   private homeUIElements: Phaser.GameObjects.GameObject[] = [];
   private homeBtnAreas: { x: number; y: number; r: number }[] = [];
+
+  // Movement effects
+  private trailGfxList: Phaser.GameObjects.Graphics[] = [];
+  private trailData: { x: number; y: number; angle: number; t: number }[] = [];
+  private lastTrailT = 0;
+  private speedGfx!: Phaser.GameObjects.Graphics;
+  private prevPlayerX = 0;
+  private prevPlayerY = 0;
 
   // -------------------------------------------------------------------
   // Global pointer handlers — stored as class properties so the same
@@ -117,7 +126,7 @@ export class GameScene extends Phaser.Scene {
     if (this.pregame && !this.gameStarted && moveLen > 2) {
       this.launchFromHome();
     }
-    if (moveLen > 0.5) {
+    if (moveLen > 1.0) {
       this.targetAngle = Math.atan2(dy, dx);
     }
     // In pregame, update() is skipped so we must redraw the player here
@@ -161,6 +170,7 @@ export class GameScene extends Phaser.Scene {
     this.bulletObjs = [];
     this.bulletReady = [];
     this.itemObjs = [];
+    this.trailGfxList = [];
     this.survivalTime = 0;
     this.bulletsDestroyed = 0;
     this.dead = false;
@@ -206,6 +216,14 @@ export class GameScene extends Phaser.Scene {
 
     this.playerGfx = this.add.graphics().setDepth(5);
     this.drawPlayer();
+
+    // Pre-allocate trail graphics (depth 4 = below player at depth 5)
+    for (let i = 0; i < 5; i++) {
+      this.trailGfxList.push(this.add.graphics().setDepth(4));
+    }
+    this.speedGfx = this.add.graphics().setDepth(4);
+    this.prevPlayerX = this.playerX;
+    this.prevPlayerY = this.playerY;
 
     // ----------------------------------------------------------------
     // HUD (within 54px bar)
@@ -387,7 +405,12 @@ export class GameScene extends Phaser.Scene {
       // d. Register button area
       this.homeBtnAreas.push({ x: bx, y: btnY, r: 40 });
 
-      // Settings action on btn 3 (index 3 = ⚙)
+      if (i === 0) {
+        hitCircle.on('pointerup', () => {
+          if (!this.pregame || this.gameStarted) return;
+          this.scene.start('CharacterScene');
+        });
+      }
       if (i === 3) {
         hitCircle.on('pointerup', () => {
           if (!this.pregame || this.gameStarted) return;
@@ -404,6 +427,13 @@ export class GameScene extends Phaser.Scene {
   // -------------------------------------------------------------------
 
   private startGame(): void {
+    this.trailData = [];
+    this.lastTrailT = 0;
+    this.prevPlayerX = this.playerX;
+    this.prevPlayerY = this.playerY;
+    for (const g of this.trailGfxList) g.clear();
+    this.speedGfx.clear();
+
     this.spawnBullet(); // first bullet spawns immediately
     this.scheduleBulletSpawn();
     this.itemTimer = this.time.addEvent({
@@ -496,35 +526,12 @@ export class GameScene extends Phaser.Scene {
 
     // dt-based exponential-decay rotation so turn speed is frame-rate-independent
     const angleDiff = Phaser.Math.Angle.Wrap(this.targetAngle - this.playerAngle);
-    const lerpFactor = 1 - Math.exp(-12 * dt); // 12 = rotation speed (tunable)
+    const lerpFactor = 1 - Math.exp(-8 * dt); // rotation speed (lower = smoother)
     this.playerAngle = Phaser.Math.Angle.Wrap(this.playerAngle + angleDiff * lerpFactor);
     g.setRotation(this.playerAngle);
 
-    // Airship/rocket shape — nose pointing right (+X) in local space.
-    // When rotation = -π/2 the nose points up (default idle pose).
-
-    // Wings (drawn behind body)
-    g.fillStyle(0xF5A623, 1);
-    g.beginPath(); g.moveTo(-4, -4); g.lineTo(-8, -12); g.lineTo(-11, -4); g.closePath(); g.fillPath();
-    g.beginPath(); g.moveTo(-4,  4); g.lineTo(-8,  12); g.lineTo(-11,  4); g.closePath(); g.fillPath();
-
-    // Main body
-    g.fillStyle(0xF5A623, 1);
-    g.lineStyle(1.5, 0xBB6600, 1);
-    g.beginPath();
-    g.moveTo(13, 0);   // nose tip
-    g.lineTo(5, -6);   // upper shoulder
-    g.lineTo(-8, -4);  // upper back
-    g.lineTo(-11, 0);  // tail
-    g.lineTo(-8, 4);   // lower back
-    g.lineTo(5, 6);    // lower shoulder
-    g.closePath();
-    g.fillPath();
-    g.strokePath();
-
-    // Cockpit / shine
-    g.fillStyle(0xFFD060, 0.75);
-    g.fillEllipse(3, 0, 9, 5);
+    const drawFn = CHARACTER_DRAW_FNS[GameSettings.selectedCharacter] ?? CHARACTER_DRAW_FNS[0];
+    drawFn(g);
   }
 
   // -------------------------------------------------------------------
@@ -685,6 +692,68 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
+    // ── Movement effects ─────────────────────────────────────────────
+    const frameDx = this.playerX - this.prevPlayerX;
+    const frameDy = this.playerY - this.prevPlayerY;
+    const frameSpeed = Math.sqrt(frameDx * frameDx + frameDy * frameDy);
+    this.prevPlayerX = this.playerX;
+    this.prevPlayerY = this.playerY;
+
+    if (GameSettings.selectedEffect === 1) {
+      if (frameSpeed > 0.5 && this.survivalTime - this.lastTrailT > 0.05) {
+        this.trailData.push({ x: this.playerX, y: this.playerY, angle: this.playerAngle, t: this.survivalTime });
+        if (this.trailData.length > 5) this.trailData.shift();
+        this.lastTrailT = this.survivalTime;
+      }
+      // Prune entries that have fully faded (age > 0.55s)
+      while (this.trailData.length > 0 && this.survivalTime - this.trailData[0].t > 0.55) {
+        this.trailData.shift();
+      }
+      const FADE_DURATION = 0.5;
+      for (let i = 0; i < 5; i++) {
+        const gfx = this.trailGfxList[i];
+        gfx.clear();
+        const trIdx = this.trailData.length - 1 - i;
+        if (trIdx < 0) continue;
+        const tr = this.trailData[trIdx];
+        const age = this.survivalTime - tr.t;
+        const alpha = Math.max(0, (1 - age / FADE_DURATION) * 0.45);
+        if (alpha <= 0) continue;
+        gfx.x = tr.x; gfx.y = tr.y;
+        gfx.setAlpha(alpha);
+        gfx.setRotation(tr.angle);
+        (CHARACTER_DRAW_FNS[GameSettings.selectedCharacter] ?? CHARACTER_DRAW_FNS[0])(gfx);
+      }
+    } else {
+      for (const g of this.trailGfxList) g.clear();
+      if (GameSettings.selectedEffect !== 2) this.trailData = [];
+    }
+
+    // Trail effect — colored dots at previous positions, fading by age
+    this.speedGfx.clear();
+    if (GameSettings.selectedEffect === 2) {
+      // Record positions (shared data store, reuses trailData approach)
+      if (frameSpeed > 0.5 && this.survivalTime - this.lastTrailT > 0.04) {
+        this.trailData.push({ x: this.playerX, y: this.playerY, angle: this.playerAngle, t: this.survivalTime });
+        if (this.trailData.length > 8) this.trailData.shift();
+        this.lastTrailT = this.survivalTime;
+      }
+      while (this.trailData.length > 0 && this.survivalTime - this.trailData[0].t > 0.5) {
+        this.trailData.shift();
+      }
+      const TRAIL_COLORS = [0x54A0FF, 0x48DBFB, 0x1DD1A1, 0x5F27CD, 0xFF9FF3];
+      const FADE_DURATION = 0.45;
+      for (let i = 0; i < Math.min(this.trailData.length, 8); i++) {
+        const tr = this.trailData[this.trailData.length - 1 - i];
+        const age = this.survivalTime - tr.t;
+        const alpha = Math.max(0, (1 - age / FADE_DURATION) * 0.75);
+        if (alpha <= 0) continue;
+        const radius = Math.max(1.5, 5.5 - i * 0.55);
+        this.speedGfx.fillStyle(TRAIL_COLORS[i % TRAIL_COLORS.length], alpha);
+        this.speedGfx.fillCircle(tr.x, tr.y, radius);
+      }
+    }
+
     this.drawPlayer(dt);
 
     // HUD update — score equals survival seconds
@@ -708,6 +777,9 @@ export class GameScene extends Phaser.Scene {
     this.dead = true;
     this.bulletTimer?.remove();
     this.itemTimer?.remove();
+
+    for (const g of this.trailGfxList) g.clear();
+    this.speedGfx.clear();
 
     this.cameras.main.shake(250, 0.012);
 

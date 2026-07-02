@@ -42,6 +42,8 @@ export const GameSettings = {
   sensitivity: 1.0,
   sound: true,
   vibration: true,
+  selectedCharacter: 0,
+  selectedEffect: 0,
 };
 
 export const GameStats = {
